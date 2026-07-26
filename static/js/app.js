@@ -64,12 +64,30 @@ const PATTERNS = ['solid','stripe-h','stripe-v','diagonal','cross'];
 let currentBodyId = 'kerbin';
 const DEFAULT_API_BASE = 'https://script.google.com/macros/s/AKfycbzxdItRr5JMawEK-LYLcd4vqLmCsHHmS5-dm4apfRSEGXbtpCTCNLkz9bs00aOEiHBq/exec';
 // hardcoded — not exposed or editable in the UI
-const sheetConfig = { apiBase: DEFAULT_API_BASE, tab:'Colonies', entityTab:'Entities' };
+const sheetConfig = { apiBase: DEFAULT_API_BASE, tab:'Colonies', entityTab:'Entities', orbitalsTab:'Orbitals' };
 let sheetFacilities = {};
 let entityFlags = {};
+let sheetOrbitals = {};
 
 function facilitiesFor(bodyId){
   return sheetFacilities[bodyId] || [];
+}
+// The Apps Script backend returns a JSON array on success, or a plain
+// {error: "..."} object if e.g. the requested tab doesn't exist. Surface
+// that message directly instead of a generic "unexpected shape" — it's
+// almost always the real, actionable reason (wrong tab name, typo, etc).
+function shapeErrorReason(rows){
+  if(rows && typeof rows==='object' && !Array.isArray(rows) && rows.error) return rows.error;
+  try{ return JSON.stringify(rows).slice(0,200); }catch(e){ return String(rows); }
+}
+function orbitalsFor(bodyId){
+  return sheetOrbitals[bodyId] || [];
+}
+// Combined surface + orbital facilities for a body — used anywhere facilities
+// are counted or listed (tree counts, the facility panel, owner summaries).
+// The 3D scene keeps the two apart, since they're placed very differently.
+function allFacilitiesFor(bodyId){
+  return facilitiesFor(bodyId).concat(orbitalsFor(bodyId));
 }
 
 /* =========================================================================
@@ -83,7 +101,7 @@ async function fetchAndParseFacilities(){
     const res = await fetch(url);
     if(!res.ok) throw new Error('HTTP '+res.status);
     const rows = await res.json();
-    if(!Array.isArray(rows)) throw new Error('unexpected response shape');
+    if(!Array.isArray(rows)) throw new Error('unexpected response shape: '+shapeErrorReason(rows));
 
     const grouped = {};
     let matched = 0, unmatched = 0;
@@ -98,7 +116,7 @@ async function fetchAndParseFacilities(){
       const name = r['name'] || r['colony'] || ('Facility '+(i+1));
       const owner = r['owner'] || r['faction'] || r['nation'] || 'Unclaimed';
       (grouped[body.id] = grouped[body.id]||[]).push({
-        id:'sheet-'+body.id+'-'+i, name, lat, lon, owner, source:'sheet'
+        id:'sheet-'+body.id+'-'+i, name, lat, lon, owner, source:'sheet', kind:'surface'
       });
       matched++;
     });
@@ -106,6 +124,52 @@ async function fetchAndParseFacilities(){
   }catch(e){
     sheetFacilities = {};
     console.warn('Could not load Facilities from the API:', e.message);
+  }
+}
+/* =========================================================================
+   GOOGLE SHEET FETCH — orbital facilities (the "Orbitals" tab)
+   Same shape as Colonies, but rows carry an orbit (SMA/eccentricity/
+   inclination) instead of a lat/lon pin. SMA(m) is measured from sea level
+   per-body (i.e. altitude above the surface, in metres), not from the
+   planet's centre — the centre-referenced semi-major axis used for
+   placement is body.radiusM + smaM.
+   ========================================================================= */
+async function fetchAndParseOrbitals(){
+  if(!sheetConfig.apiBase){ sheetOrbitals = {}; return; }
+  try{
+    const url = `${sheetConfig.apiBase}?tab=${encodeURIComponent(sheetConfig.orbitalsTab||'Orbitals')}`;
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const rows = await res.json();
+    if(!Array.isArray(rows)) throw new Error('unexpected response shape: '+shapeErrorReason(rows));
+
+    const grouped = {};
+    rows.forEach((raw,i)=>{
+      const r = {};
+      Object.keys(raw).forEach(k=>{ r[k.trim().toLowerCase()] = (raw[k]||'').toString().trim(); });
+      const planetRaw = r['planet'] || r['body'] || '';
+      const body = BODIES.find(b => b.name.toLowerCase()===planetRaw.toLowerCase() || b.id===planetRaw.toLowerCase());
+      const smaM = parseFloat(r['sma(m)'] || r['sma (m)'] || r['sma_m'] || r['sma']);
+      const eccRaw = parseFloat(r['eccentricity'] || r['ecc']);
+      const incRaw = parseFloat(r['inclination'] || r['inc']);
+      if(!body || isNaN(smaM) || smaM<0) return;
+      const ecc = isNaN(eccRaw) ? 0 : Math.min(0.95, Math.max(0, eccRaw));
+      const incDeg = isNaN(incRaw) ? 0 : incRaw;
+      const name = r['name'] || r['facility'] || ('Orbital Facility '+(i+1));
+      const owner = r['owner'] || r['faction'] || r['nation'] || 'Unclaimed';
+      const id = 'orbital-'+body.id+'-'+i;
+      // Deterministic "random" position along the orbit — fixed per facility
+      // (based on its id+name) rather than re-rolled on every load, since the
+      // facility itself doesn't move.
+      const seedNu = (hashStr(id+'|'+name) % 3600) / 3600 * Math.PI * 2;
+      (grouped[body.id] = grouped[body.id]||[]).push({
+        id, name, smaM, ecc, incDeg, owner, source:'sheet', kind:'orbital', seedNu
+      });
+    });
+    sheetOrbitals = grouped;
+  }catch(e){
+    sheetOrbitals = {};
+    console.warn('Could not load Orbitals from the API:', e.message);
   }
 }
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
@@ -120,7 +184,7 @@ async function fetchAndParseEntities(){
     const res = await fetch(url);
     if(!res.ok) throw new Error('HTTP '+res.status);
     const rows = await res.json();
-    if(!Array.isArray(rows)) throw new Error('unexpected response shape');
+    if(!Array.isArray(rows)) throw new Error('unexpected response shape: '+shapeErrorReason(rows));
     const map = {};
     rows.forEach(raw=>{
       const r = {};
@@ -146,7 +210,7 @@ async function fetchAndParseEntities(){
   }
 }
 async function fetchSheetData(){
-  await Promise.all([fetchAndParseFacilities(), fetchAndParseEntities()]);
+  await Promise.all([fetchAndParseFacilities(), fetchAndParseEntities(), fetchAndParseOrbitals()]);
   refreshAll();
 }
 
@@ -238,7 +302,7 @@ function buildSchematic(){
     const r = 3 + Math.log10(p.radiusM/1000)*0.9;
     const isActive = p.id===currentBodyId;
     svgHTML += `<g class="sch-body${isActive?' active':''}" data-body="${p.id}">
-      <circle class="dot" cx="${x}" cy="${cy}" r="${Math.max(2.5,r)}" fill="none" stroke="${p.color}" stroke-width="1.6"/>
+      <circle class="dot" cx="${x}" cy="${cy}" r="${Math.max(2.5,r)}" fill="${isActive?p.color:'none'}" stroke="${p.color}" stroke-width="1.6"/>
       <text class="sch-label" x="${x}" y="${cy+16}" text-anchor="middle">${p.name}</text>
     </g>`;
   });
@@ -256,7 +320,7 @@ function buildTree(){
   let html = `<div class="tree-star"><span class="sun-dot"></span>KERBOL</div>`;
   PLANETS.forEach(p=>{
     const moons = moonsOf(p.id);
-    const n = facilitiesFor(p.id).length;
+    const n = allFacilitiesFor(p.id).length;
     const isActive = p.id===currentBodyId;
     html += `<div class="tree-body${isActive?' active':''}" data-body="${p.id}">
       <span class="b-dot" style="border-color:${p.color};background:${isActive?p.color:'transparent'}"></span>${p.name}
@@ -265,7 +329,7 @@ function buildTree(){
     if(moons.length){
       html += `<div class="tree-moons">`;
       moons.forEach(m=>{
-        const mn = facilitiesFor(m.id).length;
+        const mn = allFacilitiesFor(m.id).length;
         const mActive = m.id===currentBodyId;
         html += `<div class="tree-body${mActive?' active':''}" data-body="${m.id}">
           <span class="b-dot" style="border-color:${m.color};background:${mActive?m.color:'transparent'}"></span>${m.name}
@@ -312,6 +376,7 @@ scene.add(contextGroup);
 
 let planetMesh=null, graticule=null;
 let markerObjs = [];
+let orbitPathObjs = [];
 // Per-body terrain sample, set once the current body's heightmap image has
 // loaded and been decoded to pixel data. Used so facility pins sit on the
 // actual displaced terrain instead of a flat sphere. Null while no heightmap
@@ -427,6 +492,7 @@ function markerRadiusFor(lat, lon){
 // happens.
 function refreshMarkerElevations(){
   markerObjs.forEach(m=>{
+    if(m.facility.kind==='orbital') return;
     const r = markerRadiusFor(m.facility.lat, m.facility.lon);
     m.mesh.position.copy(m.normal.clone().multiplyScalar(r));
   });
@@ -594,38 +660,103 @@ function clearMarkers(){
 }
 function escapeHTML(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
-function addMarkerObject(facility){
-  const owners = parseOwners(facility.owner);
-  const firstFlag = ownerFlag(owners[0]);
+/* =========================================================================
+   ORBITAL FACILITIES — placement + orbit-path geometry
+   SMA(m) from the sheet is measured from sea level (i.e. altitude above the
+   surface), so the true, centre-referenced semi-major axis is
+   body.radiusM + orbital.smaM. The orbit's focus sits at the body's centre
+   (the planetGroup origin), so a point at true anomaly nu is:
+     r = a(1-e^2) / (1 + e·cos(nu))
+   in the orbital plane, which is then tilted out of the equatorial plane by
+   the inclination (rotation about the local X axis, since Y is the body's
+   polar axis — same convention as latLonToVec3).
+   ========================================================================= */
+const ORBIT_BLUE = 0x4f8ff7;
+function orbitalPositionAt(body, orbital, nu){
+  const a = body.radiusM + orbital.smaM;
+  const e = orbital.ecc;
+  const r = a*(1-e*e) / (1 + e*Math.cos(nu));
+  const xOrb = r*Math.cos(nu), zOrb = r*Math.sin(nu);
+  const incRad = THREE.MathUtils.degToRad(orbital.incDeg);
+  const y = -zOrb*Math.sin(incRad);
+  const z =  zOrb*Math.cos(incRad);
+  const scaleFactor = RENDER_R / body.radiusM;
+  return new THREE.Vector3(xOrb*scaleFactor, y*scaleFactor, z*scaleFactor);
+}
+// Position + "up" direction for either kind of facility, in one place, so
+// addMarkerObject doesn't need to know which kind it's placing.
+function facilityWorldPos(facility, body){
+  if(facility.kind==='orbital'){
+    const pos = orbitalPositionAt(body, facility, facility.seedNu);
+    return { pos, normal: pos.clone().normalize() };
+  }
   const normal = latLonToVec3(facility.lat, facility.lon, 1); // unit direction, already normalized
   const pos = normal.clone().multiplyScalar(markerRadiusFor(facility.lat, facility.lon));
+  return { pos, normal };
+}
+
+function clearOrbitPaths(){
+  orbitPathObjs.forEach(o=>{ planetGroup.remove(o.line); o.line.geometry.dispose(); o.mat.dispose(); });
+  orbitPathObjs = [];
+}
+// Draws the orbital path as a thin ellipse loop, same visual language as the
+// lat/lon graticule — blue, and at the same opacity as the graticule's minor
+// lines (0.3) until its facility is selected, at which point animate()
+// brightens it to full opacity.
+function buildOrbitPath(body, orbital){
+  const segs = 96;
+  const pts = [];
+  for(let i=0;i<=segs;i++){
+    pts.push(orbitalPositionAt(body, orbital, (i/segs)*Math.PI*2));
+  }
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({color:ORBIT_BLUE, transparent:true, opacity:0.3});
+  const line = new THREE.LineLoop(geo, mat);
+  planetGroup.add(line);
+  orbitPathObjs.push({line, mat, facility:orbital});
+}
+
+function addMarkerObject(facility, body){
+  const owners = parseOwners(facility.owner);
+  const firstFlag = ownerFlag(owners[0]);
+  const {pos, normal} = facilityWorldPos(facility, body);
+  const isOrbital = facility.kind==='orbital';
   const group = new THREE.Group();
   group.position.copy(pos);
   group.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), normal);
 
-  const ownerMat = new THREE.LineBasicMaterial({color:new THREE.Color(firstFlag.primary)});
+  // Fades the same way the orbit path does — dim at rest, full opacity once
+  // its facility is selected (see animate()).
+  const ownerMat = new THREE.LineBasicMaterial({color:new THREE.Color(firstFlag.primary), transparent:true, opacity:0.3});
 
-  const baseRing = new THREE.LineLoop(beaconRingGeo, ownerMat);
-  baseRing.scale.set(0.03,1,0.03);
-  baseRing.position.y = 0.004;
+  let baseRing = null, mast = null;
+  if(!isOrbital){
+    // Surface facilities stand on a "mast" with a footprint ring at ground
+    // level. Orbital facilities have no ground to stand on, so they skip
+    // this entirely — just the ring, sitting right on the orbital line.
+    baseRing = new THREE.LineLoop(beaconRingGeo, ownerMat);
+    baseRing.scale.set(0.03,1,0.03);
+    baseRing.position.y = 0.004;
 
-  const mast = new THREE.Line(beaconMastGeo, ownerMat);
-  mast.scale.y = 0.09;
-  mast.position.y = 0.004;
+    mast = new THREE.Line(beaconMastGeo, ownerMat);
+    mast.scale.y = 0.09;
+    mast.position.y = 0.004;
+  }
 
   const topRingMat = new THREE.LineBasicMaterial({color:0x3fe676, transparent:true, opacity:0.9});
   const topRing = new THREE.LineLoop(beaconRingGeo, topRingMat);
   topRing.scale.set(0.017,1,0.017);
-  topRing.position.y = 0.096;
+  topRing.position.y = isOrbital ? 0 : 0.096;
 
-  group.add(baseRing, mast, topRing);
+  if(isOrbital) group.add(topRing);
+  else group.add(baseRing, mast, topRing);
   planetGroup.add(group);
 
   const label = document.createElement('div');
   label.className='marker-label';
   label.innerHTML = `<span class="m-dot"></span><span class="m-text">${escapeHTML(facility.name)}${ownerFlagsHTML(facility.owner,'m-flag')}</span>`;
   const mText = label.querySelector('.m-text');
-  const markerEntry = {mesh:group, label, mText, facility, normal, topRing, topRingMat, hovered:false, phase:Math.random()*Math.PI*2};
+  const markerEntry = {mesh:group, label, mText, facility, normal, topRing, topRingMat, ownerMat, hovered:false, phase:Math.random()*Math.PI*2};
   mText.addEventListener('click', (e)=>{ e.stopPropagation(); focusFacilityRow(facility.id); });
   mText.addEventListener('mouseenter', ()=>{ markerEntry.hovered = true; });
   mText.addEventListener('mouseleave', ()=>{ markerEntry.hovered = false; });
@@ -717,6 +848,7 @@ function loadBodyIntoScene(body){
   if(graticule){ planetGroup.remove(graticule); }
   clearGraticuleLabels();
   clearMarkers();
+  clearOrbitPaths();
   heightSample = null;
   selectedFacilityId = null;
 
@@ -779,7 +911,11 @@ function loadBodyIntoScene(body){
 
   planetGroup.rotation.set(0,0,0);
 
-  facilitiesFor(body.id).forEach(c=> addMarkerObject(c));
+  facilitiesFor(body.id).forEach(c=> addMarkerObject(c, body));
+  orbitalsFor(body.id).forEach(o=>{
+    buildOrbitPath(body, o);
+    addMarkerObject(o, body);
+  });
   buildContextBodies(body);
 }
 
@@ -849,6 +985,10 @@ function animate(){
     m.topRing.scale.set(s,1,s);
     // Same colour rule as the label text/dot: green normally, white on hover.
     m.topRingMat.color.set(m.hovered ? 0xffffff : 0x3fe676);
+    m.ownerMat.opacity = selected ? 1 : 0.3;
+  });
+  orbitPathObjs.forEach(o=>{
+    o.mat.opacity = String(o.facility.id)===String(selectedFacilityId) ? 1 : 0.3;
   });
   renderer.render(scene, camera);
   updateLabels();
@@ -859,7 +999,7 @@ function animate(){
    ========================================================================= */
 function refreshFacilityList(){
   const body = byId[currentBodyId];
-  const list = facilitiesFor(currentBodyId);
+  const list = allFacilitiesFor(currentBodyId);
   document.getElementById('facility-count').textContent = list.length;
   document.getElementById('facility-body-name').textContent = body.name.toUpperCase();
   document.getElementById('facility-sub').textContent = list.length
@@ -874,6 +1014,10 @@ function refreshFacilityList(){
   wrap.innerHTML = list.map(c=>{
     const owners = parseOwners(c.owner);
     const isSel = String(c.id)===String(selectedFacilityId);
+    const isOrbital = c.kind==='orbital';
+    const coordsHTML = isOrbital
+      ? `${(c.smaM/1000).toFixed(1)}km`
+      : `${c.lat.toFixed(1)}°,${c.lon.toFixed(1)}°`;
     return `
     <div class="facility-row${isSel?' selected':''}" data-id="${c.id}">
       <span class="c-box" style="border-color:${ownerFlag(owners[0]).primary}"></span>
@@ -881,7 +1025,7 @@ function refreshFacilityList(){
         <div class="c-name">${escapeHTML(c.name)}</div>
         <div class="c-owner">${escapeHTML(owners.join('; '))}</div>
       </span>
-      <span class="c-coords">${c.lat.toFixed(1)}°,${c.lon.toFixed(1)}°</span>
+      <span class="c-coords">${coordsHTML}</span>
     </div>`;
   }).join('');
 
@@ -904,7 +1048,7 @@ function focusFacilityRow(id){
 function allOwnersSummary(){
   const map = {};
   BODIES.forEach(b=>{
-    facilitiesFor(b.id).forEach(c=>{
+    allFacilitiesFor(b.id).forEach(c=>{
       parseOwners(c.owner).forEach(o=>{
         if(!map[o]) map[o] = {count:0, bodies:new Set()};
         map[o].count++;
@@ -965,7 +1109,7 @@ function selectBody(id){
   document.getElementById('card-radius').textContent = fmtRadius(body.radiusM);
   document.getElementById('card-orbits').textContent = byId[body.parent].name;
   document.getElementById('card-dist').textContent = fmtDist(body.smaM);
-  document.getElementById('card-facilities').textContent = facilitiesFor(id).length;
+  document.getElementById('card-facilities').textContent = allFacilitiesFor(id).length;
 
   loadBodyIntoScene(body);
   camTheta = thetaForHorizontalDir(defaultLookDir(body)); camPhi = CAM_PHI_DEFAULT; camRadius = 9; updateCameraPos();
@@ -983,7 +1127,7 @@ function refreshAll(){
   buildSchematic();
   refreshFacilityList();
   loadBodyIntoScene(byId[currentBodyId]);
-  document.getElementById('card-facilities').textContent = facilitiesFor(currentBodyId).length;
+  document.getElementById('card-facilities').textContent = allFacilitiesFor(currentBodyId).length;
   if(document.getElementById('tab-owners').classList.contains('active')) renderOwnersList();
 }
 
