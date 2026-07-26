@@ -1,0 +1,925 @@
+if (typeof THREE === 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    const vp = document.getElementById('viewport');
+    if (vp) vp.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e6555a;font-family:sans-serif;text-align:center;padding:20px;">Three.js failed to load from CDN.<br>Check your network/CDN access and reload.</div>';
+  });
+  throw new Error('THREE.js not loaded');
+}
+
+/* =========================================================================
+   DATA — Kerbol System (Kerbal Space Program), approximate real game values
+   ========================================================================= */
+const BODIES = [
+  { id:'kerbol', name:'Kerbol', type:'Star', parent:null, radiusM:261600000, smaM:0,
+    color:'#ffcf6b', secondary:'#ff8a24', style:'star' },
+
+  { id:'moho', name:'Moho', type:'Planet', parent:'kerbol', radiusM:250000, smaM:5263138304,
+    color:'#8a6a4d', secondary:'#5e4531', style:'cratered' },
+
+  { id:'eve', name:'Eve', type:'Planet', parent:'kerbol', radiusM:700000, smaM:9832684544,
+    color:'#7c3fa3', secondary:'#4c2568', style:'terran' },
+  { id:'gilly', name:'Gilly', type:'Moon', parent:'eve', radiusM:13000, smaM:31500000,
+    color:'#a7997c', secondary:'#7d7159', style:'cratered', tidalLocked:false },
+
+  { id:'kerbin', name:'Kerbin', type:'Planet', parent:'kerbol', radiusM:600000, smaM:13599840256,
+    color:'#2f7dc4', secondary:'#3f9c4c', style:'terran' },
+  { id:'mun', name:'Mun', type:'Moon', parent:'kerbin', radiusM:200000, smaM:12000000,
+    color:'#9a958c', secondary:'#6f6a62', style:'cratered', tidalLocked:true },
+  { id:'minmus', name:'Minmus', type:'Moon', parent:'kerbin', radiusM:60000, smaM:47000000,
+    color:'#5fc3ac', secondary:'#3d8f7d', style:'flats', tidalLocked:false },
+
+  { id:'duna', name:'Duna', type:'Planet', parent:'kerbol', radiusM:320000, smaM:20726155264,
+    color:'#c1652f', secondary:'#8a441f', style:'terran' },
+  { id:'ike', name:'Ike', type:'Moon', parent:'duna', radiusM:130000, smaM:3200000,
+    color:'#8f8b85', secondary:'#615d58', style:'cratered', tidalLocked:true },
+
+  { id:'dres', name:'Dres', type:'Dwarf Planet', parent:'kerbol', radiusM:138000, smaM:40839348203,
+    color:'#7d7368', secondary:'#54493f', style:'cratered' },
+
+  { id:'jool', name:'Jool', type:'Gas Giant', parent:'kerbol', radiusM:6000000, smaM:68773560320, color:'#4f9d5c', secondary:'#2e6e3d', style:'bands' },
+  { id:'laythe', name:'Laythe', type:'Moon', parent:'jool', radiusM:500000, smaM:27184000,
+    color:'#3f7ea6', secondary:'#c9a86a', style:'terran', tidalLocked:true },
+  { id:'vall', name:'Vall', type:'Moon', parent:'jool', radiusM:300000, smaM:43152000,
+    color:'#cfe3e8', secondary:'#9fb8c2', style:'icy', tidalLocked:true },
+  { id:'tylo', name:'Tylo', type:'Moon', parent:'jool', radiusM:600000, smaM:68500000,
+    color:'#b8b3a8', secondary:'#84806f', style:'cratered', tidalLocked:true },
+  { id:'bop', name:'Bop', type:'Moon', parent:'jool', radiusM:65000, smaM:128500000,
+    color:'#9c7a52', secondary:'#6a5236', style:'cratered', tidalLocked:false },
+  { id:'pol', name:'Pol', type:'Moon', parent:'jool', radiusM:44000, smaM:179890000,
+    color:'#cbab6c', secondary:'#94743f', style:'cratered', tidalLocked:false },
+
+  { id:'eeloo', name:'Eeloo', type:'Dwarf Planet', parent:'kerbol', radiusM:210000, smaM:90118820000,
+    color:'#dfe6e8', secondary:'#a9b8bc', style:'icy' },
+];
+const byId = Object.fromEntries(BODIES.map(b=>[b.id,b]));
+const PLANETS = BODIES.filter(b=>b.parent==='kerbol');
+const moonsOf = pid => BODIES.filter(b=>b.parent===pid);
+
+const PALETTE = ['#e6555a','#ff8a24','#f2c14e','#5fc3ac','#3fd0c9','#4f8ff7','#8a6dd8','#d16fc9','#ffffff','#9aa7ba'];
+const PATTERNS = ['solid','stripe-h','stripe-v','diagonal','cross'];
+
+/* =========================================================================
+   STATE
+   ========================================================================= */
+let currentBodyId = 'kerbin';
+const DEFAULT_API_BASE = 'https://script.google.com/macros/s/AKfycbzxdItRr5JMawEK-LYLcd4vqLmCsHHmS5-dm4apfRSEGXbtpCTCNLkz9bs00aOEiHBq/exec';
+// hardcoded — not exposed or editable in the UI
+const sheetConfig = { apiBase: DEFAULT_API_BASE, tab:'Colonies', entityTab:'Entities' };
+let sheetColonies = {};
+let entityFlags = {};
+
+function coloniesFor(bodyId){
+  return sheetColonies[bodyId] || [];
+}
+
+/* =========================================================================
+   GOOGLE SHEET FETCH  — via the deployed Apps Script API (kolonypedia-appscript.gs),
+   which returns each tab as JSON in the same shape opensheet.elk.sh used to.
+   ========================================================================= */
+async function fetchAndParseColonies(){
+  if(!sheetConfig.apiBase){ sheetColonies = {}; return; }
+  try{
+    const url = `${sheetConfig.apiBase}?tab=${encodeURIComponent(sheetConfig.tab||'Colonies')}`;
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const rows = await res.json();
+    if(!Array.isArray(rows)) throw new Error('unexpected response shape');
+
+    const grouped = {};
+    let matched = 0, unmatched = 0;
+    rows.forEach((raw,i)=>{
+      const r = {};
+      Object.keys(raw).forEach(k=>{ r[k.trim().toLowerCase()] = (raw[k]||'').toString().trim(); });
+      const planetRaw = r['planet'] || r['body'] || '';
+      const body = BODIES.find(b => b.name.toLowerCase()===planetRaw.toLowerCase() || b.id===planetRaw.toLowerCase());
+      const lat = parseFloat(r['lat'] || r['latitude']);
+      const lon = parseFloat(r['lon'] || r['long'] || r['longitude']);
+      if(!body || isNaN(lat) || isNaN(lon)){ unmatched++; return; }
+      const name = r['name'] || r['colony'] || ('Kolony '+(i+1));
+      const owner = r['owner'] || r['faction'] || r['nation'] || 'Unclaimed';
+      (grouped[body.id] = grouped[body.id]||[]).push({
+        id:'sheet-'+body.id+'-'+i, name, lat, lon, owner, source:'sheet'
+      });
+      matched++;
+    });
+    sheetColonies = grouped;
+  }catch(e){
+    sheetColonies = {};
+    console.warn('Kolonypedia: could not load Colonies from the API:', e.message);
+  }
+}
+const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
+function normalizeHex(v){
+  v = (v||'').trim();
+  if(!HEX_RE.test(v)) return null;
+  return v.startsWith('#') ? v : '#'+v;
+}
+async function fetchAndParseEntities(){
+  try{
+    const url = `${sheetConfig.apiBase}?tab=${encodeURIComponent(sheetConfig.entityTab||'Entities')}`;
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const rows = await res.json();
+    if(!Array.isArray(rows)) throw new Error('unexpected response shape');
+    const map = {};
+    rows.forEach(raw=>{
+      const r = {};
+      Object.keys(raw).forEach(k=>{ r[k.trim().toLowerCase()] = (raw[k]||'').toString().trim(); });
+      const name = r['entity'] || r['name'] || r['owner'] || '';
+      if(!name) return;
+      const primary = normalizeHex(r['primary'] || r['color'] || r['colour']);
+      const secondary = normalizeHex(r['secondary']);
+      const pattern = PATTERNS.includes((r['pattern']||'').toLowerCase()) ? r['pattern'].toLowerCase() : null;
+      const flagUrlRaw = r['flag'] || r['image'] || r['flagurl'] || r['flag url'] || '';
+      const image = isSafeImageUrl(flagUrlRaw) ? flagUrlRaw : null;
+      if(!primary && !image) return;
+      const entry = {};
+      if(primary) entry.primary = primary;
+      if(secondary) entry.secondary = secondary;
+      if(pattern) entry.pattern = pattern;
+      if(image) entry.image = image;
+      map[name.trim().toLowerCase()] = entry;
+    });
+    entityFlags = map;
+  }catch(e){
+    // entity flags are optional — silently fall back to auto-generated ones
+  }
+}
+async function fetchSheetData(){
+  await Promise.all([fetchAndParseColonies(), fetchAndParseEntities()]);
+  refreshAll();
+}
+
+/* =========================================================================
+   TOAST
+   ========================================================================= */
+let toastTimer=null;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), 2200);
+}
+
+/* =========================================================================
+   OWNER-DERIVED FLAGS
+   Every colony's flag is deterministically derived from its Owner string,
+   so every settlement belonging to the same faction shares one flag —
+   anywhere in the system, sourced from the sheet or added locally.
+   ========================================================================= */
+function hashStr(str){ let h=0; for(let i=0;i<str.length;i++){ h=(h<<5)-h+str.charCodeAt(i); h|=0; } return h>>>0; }
+function ownerFlag(owner){
+  owner = owner || 'Unclaimed';
+  const h = hashStr(owner);
+  let primary = PALETTE[h % PALETTE.length];
+  let secondary = PALETTE[(h>>>4) % PALETTE.length];
+  if(secondary===primary) secondary = PALETTE[(PALETTE.indexOf(primary)+4) % PALETTE.length];
+  const pattern = PATTERNS[(h>>>8) % PATTERNS.length];
+  const explicit = entityFlags[owner.trim().toLowerCase()];
+  if(explicit){
+    return {
+      primary: explicit.primary || primary,
+      secondary: explicit.secondary || secondary,
+      pattern: explicit.pattern || pattern,
+      image: explicit.image || null
+    };
+  }
+  return { primary, secondary, pattern, image:null };
+}
+function flagCSS(primary, secondary, pattern){
+  switch(pattern){
+    case 'solid': return `background:${primary};`;
+    case 'stripe-h': return `background: linear-gradient(0deg, ${primary} 34%, ${secondary} 34%, ${secondary} 66%, ${primary} 66%);`;
+    case 'stripe-v': return `background: linear-gradient(90deg, ${primary} 34%, ${secondary} 34%, ${secondary} 66%, ${primary} 66%);`;
+    case 'diagonal': return `background: linear-gradient(135deg, ${primary} 48%, ${secondary} 52%);`;
+    case 'cross': return `background:${primary}; background-image: linear-gradient(${secondary},${secondary}), linear-gradient(${secondary},${secondary}); background-size: 100% 30%, 30% 100%; background-position: center; background-repeat: no-repeat;`;
+    default: return `background:${primary};`;
+  }
+}
+function isSafeImageUrl(url){
+  return /^https?:\/\//i.test(url||'');
+}
+function flagStyle(flag){
+  if(flag.image){
+    const safeUrl = flag.image.replace(/'/g,'%27').replace(/"/g,'%22');
+    return `background-image:url('${safeUrl}'); background-size:cover; background-position:center; background-color:${flag.primary};`;
+  }
+  return flagCSS(flag.primary, flag.secondary, flag.pattern);
+}
+function parseOwners(ownerStr){
+  const parts = (ownerStr||'').split(';').map(s=>s.trim()).filter(Boolean);
+  return parts.length ? parts : ['Unclaimed'];
+}
+function ownerFlagsHTML(ownerStr, flagClass){
+  const owners = parseOwners(ownerStr);
+  const swatches = owners.map(o=>{
+    const f = ownerFlag(o);
+    return `<span class="${flagClass}" style="${flagStyle(f)}" title="${escapeHTML(o)}"></span>`;
+  }).join('');
+  return `<span class="flag-group">${swatches}</span>`;
+}
+
+/* =========================================================================
+   SIDEBAR: system schematic (SVG)
+   ========================================================================= */
+function buildSchematic(){
+  const svg = document.getElementById('schematic');
+  const W=250,H=96, padL=14, padR=10, cy=H/2+6;
+  const smas = PLANETS.map(p=>p.smaM);
+  const logMin = Math.log10(Math.min(...smas));
+  const logMax = Math.log10(Math.max(...smas));
+  const xFor = sma => padL + (Math.log10(sma)-logMin)/(logMax-logMin) * (W-padL-padR);
+
+  let svgHTML = `<line x1="${padL-8}" y1="${cy}" x2="${W-padR+2}" y2="${cy}" stroke="#1f2c40" stroke-width="1"/>`;
+  svgHTML += `<circle cx="${padL-8}" cy="${cy}" r="5" fill="#ffcf6b"/>`;
+  PLANETS.forEach(p=>{
+    const x = xFor(p.smaM);
+    const r = 3 + Math.log10(p.radiusM/1000)*0.9;
+    svgHTML += `<g class="sch-body${p.id===currentBodyId?' active':''}" data-body="${p.id}">
+      <circle class="dot" cx="${x}" cy="${cy}" r="${Math.max(2.5,r)}" fill="${p.color}"/>
+      <text class="sch-label" x="${x}" y="${cy+16}" text-anchor="middle">${p.name}</text>
+    </g>`;
+  });
+  svg.innerHTML = svgHTML;
+  svg.querySelectorAll('.sch-body').forEach(g=>{
+    g.addEventListener('click', ()=> selectBody(g.dataset.body));
+  });
+}
+
+/* =========================================================================
+   SIDEBAR: body tree
+   ========================================================================= */
+function buildTree(){
+  const tree = document.getElementById('tree');
+  let html = `<div class="tree-star"><span class="sun-dot"></span>KERBOL</div>`;
+  PLANETS.forEach(p=>{
+    const moons = moonsOf(p.id);
+    const n = coloniesFor(p.id).length;
+    html += `<div class="tree-body${p.id===currentBodyId?' active':''}" data-body="${p.id}">
+      <span class="b-dot" style="background:${p.color}"></span>${p.name}
+      ${n?`<span class="b-count">${n}</span>`:''}
+    </div>`;
+    if(moons.length){
+      html += `<div class="tree-moons">`;
+      moons.forEach(m=>{
+        const mn = coloniesFor(m.id).length;
+        html += `<div class="tree-body${m.id===currentBodyId?' active':''}" data-body="${m.id}">
+          <span class="b-dot" style="background:${m.color}"></span>${m.name}
+          ${mn?`<span class="b-count">${mn}</span>`:''}
+        </div>`;
+      });
+      html += `</div>`;
+    }
+  });
+  tree.innerHTML = html;
+  tree.querySelectorAll('.tree-body[data-body]').forEach(el=>{
+    el.addEventListener('click', ()=> selectBody(el.dataset.body));
+  });
+}
+
+/* =========================================================================
+   NUMBER FORMATTING
+   ========================================================================= */
+function fmtDist(m){
+  if(m===0) return '—';
+  if(m>=1e9) return (m/1e9).toFixed(2)+' Gm';
+  if(m>=1e6) return (m/1e6).toFixed(1)+' Mm';
+  return (m/1e3).toFixed(0)+' km';
+}
+function fmtRadius(m){ return (m/1000).toLocaleString()+' km'; }
+
+/* =========================================================================
+   THREE.JS SCENE
+   ========================================================================= */
+const RENDER_R = 2.0;
+const canvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true, logarithmicDepthBuffer:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(46, 1, 0.1, 20000);
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+scene.add(ambientLight);
+const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
+keyLight.position.set(5,4,6);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+fillLight.position.set(-4,-2,-5);
+scene.add(fillLight);
+
+let planetGroup = new THREE.Group();
+scene.add(planetGroup);
+let contextGroup = new THREE.Group();
+scene.add(contextGroup);
+
+let planetMesh=null, graticule=null;
+let markerObjs = [];
+// Per-body terrain sample, set once the current body's heightmap image has
+// loaded and been decoded to pixel data. Used so colony pins sit on the
+// actual displaced terrain instead of a flat sphere. Null while no heightmap
+// data is available yet (or for bodies with none), in which case pins fall
+// back to the flat RENDER_R radius.
+let heightSample = null;
+let contextObjs = [];
+let contextLabels = [];
+let loadToken = 0;
+
+const CAM_PHI_DEFAULT = 1.25;
+const unitSphereGeo = new THREE.SphereGeometry(1, 128, 96);
+const contextSphereGeo = new THREE.SphereGeometry(1, 24, 16);
+
+let camTheta = 0, camPhi = CAM_PHI_DEFAULT, camRadius = 9;
+const camRadiusMin=4, camRadiusMax=16;
+function updateCameraPos(){
+  camPhi = Math.max(0.18, Math.min(Math.PI-0.18, camPhi));
+  camRadius = Math.max(camRadiusMin, Math.min(camRadiusMax, camRadius));
+  camera.position.set(
+    camRadius*Math.sin(camPhi)*Math.cos(camTheta),
+    camRadius*Math.cos(camPhi),
+    camRadius*Math.sin(camPhi)*Math.sin(camTheta)
+  );
+  camera.lookAt(0,0,0);
+}
+updateCameraPos();
+
+let dragging=false, lastX=0, lastY=0;
+
+canvas.addEventListener('pointerdown', e=>{
+  dragging=true; lastX=e.clientX; lastY=e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  camTheta += dx*0.006;
+  camPhi   -= dy*0.006;
+  lastX=e.clientX; lastY=e.clientY;
+  updateCameraPos();
+});
+window.addEventListener('pointerup', ()=>{ dragging=false; });
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  camRadius += e.deltaY*0.0022;
+  updateCameraPos();
+}, {passive:false});
+let pinchDist=null;
+canvas.addEventListener('touchmove', e=>{
+  if(e.touches.length===2){
+    const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+    if(pinchDist!=null){ camRadius -= (d-pinchDist)*0.01; updateCameraPos(); }
+    pinchDist=d;
+  }
+},{passive:true});
+canvas.addEventListener('touchend', ()=>{pinchDist=null;});
+
+function latLonToVec3(lat, lon, r){
+  const phi = THREE.MathUtils.degToRad(lat);
+  const lam = THREE.MathUtils.degToRad(lon);
+  return new THREE.Vector3(
+    r*Math.cos(phi)*Math.cos(lam),
+    r*Math.sin(phi),
+    r*Math.cos(phi)*Math.sin(lam)
+  );
+}
+
+// Decodes a loaded heightmap Image element into raw pixel data we can sample
+// directly, independent of how the corresponding THREE.Texture's UVs/repeat/
+// offset are set up for rendering on the sphere.
+function imageToImageData(img){
+  const cvs = document.createElement('canvas');
+  cvs.width = img.width; cvs.height = img.height;
+  const ctx = cvs.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  return ctx.getImageData(0, 0, img.width, img.height);
+}
+// Same equirectangular convention as the SatelliteMap tiles (0° longitude at
+// the centre column, ±180° at the edges), with the standard assumption that
+// the top row is the north pole (lat +90) and the bottom row the south pole
+// (lat -90). Nearest-neighbour sample of the red channel, since heightmaps
+// are greyscale.
+function sampleHeight01(imgData, lat, lon){
+  const w = imgData.width, h = imgData.height;
+  let u = (lon + 180) / 360;
+  u = ((u % 1) + 1) % 1;
+  let v = (90 - lat) / 180;
+  v = Math.min(1, Math.max(0, v));
+  let x = Math.min(w - 1, Math.floor(u * w));
+  let y = Math.min(h - 1, Math.floor(v * h));
+  return imgData.data[(y * w + x) * 4] / 255;
+}
+// Mirrors the displacement math applied to the terrain mesh itself
+// (mat.displacementScale/Bias, object-space radius 1) so a pin's radius
+// matches the ground beneath it. Falls back to the flat RENDER_R radius
+// when no heightmap has been sampled yet for the current body. A small
+// fixed lift keeps the pin base from clipping into terrain, since this is a
+// nearest-neighbour sample against the shader's bilinear-interpolated
+// displacement.
+const PIN_SURFACE_LIFT = RENDER_R * 0.002;
+function markerRadiusFor(lat, lon){
+  if(!heightSample) return RENDER_R;
+  const v = sampleHeight01(heightSample.imgData, lat, lon);
+  const objRadius = 1 + heightSample.objBias + v * heightSample.objScale;
+  return RENDER_R * objRadius + PIN_SURFACE_LIFT;
+}
+// Recomputes the world position of every already-placed pin against the
+// current heightSample — called once a body's heightmap finishes loading,
+// since markers are placed (at the flat fallback radius) before that
+// happens.
+function refreshMarkerElevations(){
+  markerObjs.forEach(m=>{
+    const r = markerRadiusFor(m.colony.lat, m.colony.lon);
+    m.mesh.position.copy(m.normal.clone().multiplyScalar(r));
+  });
+}
+
+// Simple shared placeholder used while a body's real satellite imagery is
+// loading (or in place of it entirely for bodies with none, e.g. Jool) — a
+// single flat black texture, reused for every body rather than a unique
+// procedural texture per body.
+let blackTexture = null;
+function getBodyTexture(){
+  if(blackTexture) return blackTexture;
+  const cvs=document.createElement('canvas'); cvs.width=2; cvs.height=2;
+  const ctx=cvs.getContext('2d');
+  ctx.fillStyle='#000000'; ctx.fillRect(0,0,2,2);
+  blackTexture = new THREE.CanvasTexture(cvs);
+  blackTexture.needsUpdate = true;
+  return blackTexture;
+}
+function loadImageTexture(url){
+  return new Promise((resolve,reject)=>{
+    const loader = new THREE.TextureLoader();
+    loader.crossOrigin = 'anonymous';
+    loader.load(url, tex=>{
+      // The streaming SatelliteMap/HeightMap tiles are equirectangular with
+      // column 0 at 180°W, the centre column at 0° longitude, and the last
+      // column at 180°E. repeat.x=1/offset.x=1 (equivalent to no change,
+      // since offset wraps mod 1) is the value confirmed to line imagery up
+      // correctly with colony pins and the lat/lon grid.
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.repeat.x = 1;
+      tex.offset.x = 1;
+      tex.needsUpdate = true;
+      resolve(tex);
+    }, undefined, err=>reject(err));
+  });
+}
+
+/* =========================================================================
+   LOCAL STREAMING IMAGERY  — replaces the sheet-based "Bodies" imagery tab.
+   Per-body diffuse (SatelliteMap) and heightmap (HeightMap) tiles, plus an
+   Info.txt giving the real lowest/highest terrain altitude, are read
+   straight from the streaming/ folder shipped alongside this app. Bodies
+   without a folder (e.g. Jool, a gas giant) simply 404 and fall back to
+   the procedural placeholder texture, same as before.
+   ========================================================================= */
+const STREAM_BASE = 'streaming';
+function streamingUrlsFor(body){
+  const base = `${STREAM_BASE}/${body.name}`;
+  return {
+    diffuse: `${base}/SatelliteMap/Tile0000.png`,
+    heightmap: `${base}/HeightMap/Tile0000.png`,
+    info: `${base}/Info.txt`
+  };
+}
+let altitudeCache = {};
+async function getAltitudeRange(body){
+  if(Object.prototype.hasOwnProperty.call(altitudeCache, body.id)) return altitudeCache[body.id];
+  try{
+    const res = await fetch(streamingUrlsFor(body).info);
+    if(!res.ok) throw new Error('no Info.txt');
+    const text = await res.text();
+    const lowestMatch = text.match(/Lowest Point[\s\S]*?ALT\s*=\s*(-?[\d.]+)/i);
+    const highestMatch = text.match(/Highest Point[\s\S]*?ALT\s*=\s*(-?[\d.]+)/i);
+    const radiusMatch = text.match(/Radius\s*\(km\)\s*=\s*(-?[\d.]+)/i);
+    if(!lowestMatch || !highestMatch) throw new Error('unrecognized Info.txt format');
+    const range = {
+      lowestAlt: parseFloat(lowestMatch[1]),
+      highestAlt: parseFloat(highestMatch[1]),
+      // the exact reference radius the heightmap/satellite tiles were generated
+      // against, in metres — falls back to our own game-data radius if Info.txt
+      // doesn't specify one, so older Info.txt files still work
+      radiusM: radiusMatch ? parseFloat(radiusMatch[1])*1000 : body.radiusM
+    };
+    altitudeCache[body.id] = range;
+    return range;
+  }catch(e){
+    altitudeCache[body.id] = null;
+    return null;
+  }
+}
+
+function buildGraticule(r){
+  const group = new THREE.Group();
+  const matNormal = new THREE.LineBasicMaterial({color:0xbcd4e8, transparent:true, opacity:0.22});
+  const matMajor = new THREE.LineBasicMaterial({color:0x8fe3db, transparent:true, opacity:0.55});
+  const segs=96;
+  for(let lonStep=0; lonStep<180; lonStep+=30){
+    const pts2=[];
+    for(let i=0;i<=segs;i++){
+      const a = (i/segs)*Math.PI*2;
+      const lam = THREE.MathUtils.degToRad(lonStep);
+      const x = r*Math.cos(a)*Math.cos(lam);
+      const y = r*Math.sin(a);
+      const z = r*Math.cos(a)*Math.sin(lam);
+      pts2.push(new THREE.Vector3(x,y,z));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts2);
+    const isMajor = lonStep===0;
+    group.add(new THREE.LineLoop(geo, isMajor?matMajor:matNormal));
+  }
+  for(let lat=-60; lat<=60; lat+=30){
+    const pts=[];
+    const phi = THREE.MathUtils.degToRad(lat);
+    const rr = r*Math.cos(phi), yy = r*Math.sin(phi);
+    for(let i=0;i<=segs;i++){
+      const a = (i/segs)*Math.PI*2;
+      pts.push(new THREE.Vector3(rr*Math.cos(a), yy, rr*Math.sin(a)));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    group.add(new THREE.LineLoop(geo, lat===0?matMajor:matNormal));
+  }
+  return group;
+}
+
+const pinGeo = new THREE.ConeGeometry(0.032, 0.09, 10);
+const pinCapGeo = new THREE.SphereGeometry(0.026, 10, 8);
+
+function clearMarkers(){
+  markerObjs.forEach(m=>{ planetGroup.remove(m.mesh); });
+  markerObjs = [];
+  document.getElementById('marker-layer').innerHTML='';
+}
+function escapeHTML(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function addMarkerObject(colony){
+  const owners = parseOwners(colony.owner);
+  const firstFlag = ownerFlag(owners[0]);
+  const normal = latLonToVec3(colony.lat, colony.lon, 1); // unit direction, already normalized
+  const pos = normal.clone().multiplyScalar(markerRadiusFor(colony.lat, colony.lon));
+  const group = new THREE.Group();
+  group.position.copy(pos);
+  group.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), normal);
+
+  const mat = new THREE.MeshBasicMaterial({color:new THREE.Color(firstFlag.primary)});
+  const cone = new THREE.Mesh(pinGeo, mat);
+  cone.position.y = 0.045;
+  const cap = new THREE.Mesh(pinCapGeo, new THREE.MeshBasicMaterial({color:0xffffff}));
+  cap.position.y = 0.095;
+  group.add(cone); group.add(cap);
+  planetGroup.add(group);
+
+  const label = document.createElement('div');
+  label.className='marker-label';
+  label.innerHTML = `${escapeHTML(colony.name)}${ownerFlagsHTML(colony.owner,'m-flag')}`;
+  label.addEventListener('click', (e)=>{ e.stopPropagation(); focusColonyRow(colony.id); });
+  document.getElementById('marker-layer').appendChild(label);
+
+  markerObjs.push({mesh:group, label, colony, normal});
+}
+
+function clearContextBodies(){
+  contextObjs.forEach(o=>{ contextGroup.remove(o.mesh); o.mesh.material.dispose(); });
+  contextObjs = [];
+  contextLabels.forEach(l=>{ if(l.el.parentNode) l.el.parentNode.removeChild(l.el); });
+  contextLabels = [];
+}
+function addContextSphere(body, position, size){
+  const tex = getBodyTexture();
+  const mat = new THREE.MeshLambertMaterial({map:tex});
+  const mesh = new THREE.Mesh(contextSphereGeo, mat);
+  mesh.scale.setScalar(size);
+  mesh.position.copy(position);
+  contextGroup.add(mesh);
+  contextObjs.push({mesh, body});
+
+  const streamUrls = streamingUrlsFor(body);
+  loadImageTexture(streamUrls.diffuse).then(t=>{
+    mat.map = t; mat.needsUpdate = true;
+  }).catch(()=>{ /* no local imagery for this body (e.g. Jool) — keep procedural fallback */ });
+
+  const label = document.createElement('div');
+  label.className='context-label';
+  label.textContent = body.name;
+  document.getElementById('context-label-layer').appendChild(label);
+  contextLabels.push({el:label, mesh});
+}
+function rotateAroundY(vec, angleRad){
+  const c = Math.cos(angleRad), s = Math.sin(angleRad);
+  return new THREE.Vector3(vec.x*c - vec.z*s, 0, vec.x*s + vec.z*c);
+}
+const SAFE_AZ = 12;
+function spreadAzimuths(count, span){
+  if(count<=0) return [];
+  if(count===1) return [0];
+  const arr=[];
+  for(let i=0;i<count;i++) arr.push(-span + (2*span*i)/(count-1));
+  return arr;
+}
+const CANON_DIR = new THREE.Vector3(1,0,0);
+function familyCanonicalPositions(parent){
+  const moons = moonsOf(parent.id);
+  const azs = spreadAzimuths(moons.length, SAFE_AZ);
+  const canonical = { [parent.id]: new THREE.Vector3(0,0,0) };
+  moons.forEach((m,i)=>{
+    const dir = rotateAroundY(CANON_DIR, THREE.MathUtils.degToRad(azs[i]));
+    canonical[m.id] = dir.multiplyScalar(m.smaM);
+  });
+  return canonical;
+}
+function familyOf(focused){
+  const parent = focused.type==='Moon' ? byId[focused.parent] : focused;
+  return { parent, canonical: familyCanonicalPositions(parent) };
+}
+function defaultLookDir(focused){
+  const {canonical} = familyOf(focused);
+  if(focused.type==='Moon') return canonical[focused.id].clone().negate().normalize();
+  return CANON_DIR.clone();
+}
+function thetaForHorizontalDir(dir){
+  return Math.atan2(-dir.z, -dir.x);
+}
+function buildContextBodies(focused){
+  clearContextBodies();
+  const scaleFactor = RENDER_R / focused.radiusM;
+  const { parent, canonical } = familyOf(focused);
+  const focusedCanon = canonical[focused.id] || new THREE.Vector3(0,0,0);
+  const minDist = RENDER_R*1.4;
+  [parent, ...moonsOf(parent.id)].forEach(b=>{
+    if(b.id===focused.id) return;
+    let pos = canonical[b.id].clone().sub(focusedCanon).multiplyScalar(scaleFactor);
+    if(pos.length() < minDist){
+      pos = (pos.lengthSq()>1e-9 ? pos.clone().normalize() : CANON_DIR.clone()).multiplyScalar(minDist);
+    }
+    addContextSphere(b, pos, b.radiusM*scaleFactor);
+  });
+}
+
+function loadBodyIntoScene(body){
+  const myToken = ++loadToken;
+  if(planetMesh){ planetGroup.remove(planetMesh); planetMesh.material.dispose(); }
+  if(graticule){ planetGroup.remove(graticule); }
+  clearMarkers();
+  heightSample = null;
+
+  const fallbackTex = getBodyTexture();
+  const mat = new THREE.MeshStandardMaterial({map:fallbackTex, roughness:0.95, metalness:0.0});
+  planetMesh = new THREE.Mesh(unitSphereGeo, mat);
+  planetMesh.scale.setScalar(RENDER_R);
+  planetGroup.add(planetMesh);
+
+  const streamUrls = streamingUrlsFor(body);
+  loadImageTexture(streamUrls.diffuse).then(t=>{
+    if(myToken!==loadToken) return;
+    mat.map = t; mat.needsUpdate = true;
+  }).catch(()=>{ /* no local imagery for this body (e.g. Jool) — keep procedural fallback */ });
+
+  getAltitudeRange(body).then(range=>{
+    if(myToken!==loadToken) return;
+    loadImageTexture(streamUrls.heightmap).then(t=>{
+      if(myToken!==loadToken) return;
+      mat.displacementMap = t;
+      // Displacement is applied in the geometry's own OBJECT space (a unit
+      // sphere, radius 1) before the mesh's RENDER_R scale is applied — so the
+      // correct units here are altitude as a fraction of the body's real
+      // radius, not raw metres, and NOT pre-multiplied by RENDER_R (that would
+      // double-apply the scale once RENDER_R is applied on top, exaggerating
+      // relief height). Black (0) in the heightmap -> lowestAlt, white (1) -> highestAlt.
+      let objScale, objBias;
+      if(range){
+        objBias = range.lowestAlt / range.radiusM;
+        objScale = (range.highestAlt - range.lowestAlt) / range.radiusM;
+      } else {
+        objScale = 0.03;
+        objBias = -0.01;
+      }
+      mat.displacementScale = objScale;
+      mat.displacementBias = objBias;
+      mat.needsUpdate = true;
+
+      // Decode the same heightmap image (t.image) to raw pixel data so pins
+      // can be placed at the matching terrain radius, then move any
+      // already-placed pins onto it.
+      heightSample = { imgData: imageToImageData(t.image), objScale, objBias };
+      refreshMarkerElevations();
+      // The lat/lon grid was drawn at a fixed radius, but real terrain can now
+      // bulge out past that. (objScale + objBias) is the highest point's offset
+      // in the same object space as the displacement above — convert to world
+      // units (multiply by RENDER_R) and rebuild the grid just outside it, so
+      // it never sits under a mountain.
+      const peakWorldOffset = RENDER_R * Math.max(0, objScale + objBias);
+      const graticuleRadius = RENDER_R*1.004 + peakWorldOffset;
+      if(graticule){ planetGroup.remove(graticule); }
+      graticule = buildGraticule(graticuleRadius);
+      planetGroup.add(graticule);
+    }).catch(()=>{ /* no local heightmap for this body — flat sphere is fine */ });
+  });
+
+  graticule = buildGraticule(RENDER_R*1.004);
+  planetGroup.add(graticule);
+
+  planetGroup.rotation.set(0,0,0);
+
+  coloniesFor(body.id).forEach(c=> addMarkerObject(c));
+  buildContextBodies(body);
+}
+
+function resizeRenderer(){
+  const vp = document.getElementById('viewport');
+  const w = vp.clientWidth, h = vp.clientHeight;
+  renderer.setSize(w,h,false);
+  camera.aspect = w/Math.max(h,1);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resizeRenderer);
+
+function updateLabels(){
+  const rect = canvas.getBoundingClientRect();
+
+  markerObjs.forEach(m=>{
+    const worldPos = new THREE.Vector3();
+    m.mesh.getWorldPosition(worldPos);
+    const worldNormal = m.normal.clone().applyQuaternion(planetGroup.quaternion);
+    const toCam = camera.position.clone().sub(worldPos).normalize();
+    const facing = worldNormal.dot(toCam);
+    const proj = worldPos.clone().project(camera);
+    const visible = facing > 0.06 && proj.z < 1;
+    if(!visible){ m.label.style.opacity='0'; m.label.style.pointerEvents='none'; return; }
+    const x = (proj.x*0.5+0.5)*rect.width;
+    const y = (-proj.y*0.5+0.5)*rect.height - 10;
+    m.label.style.left = x+'px';
+    m.label.style.top = y+'px';
+    m.label.style.opacity = (0.4+facing*0.8>1?1:0.4+facing*0.8);
+    m.label.style.pointerEvents='auto';
+  });
+
+  contextLabels.forEach(l=>{
+    const worldPos = new THREE.Vector3();
+    l.mesh.getWorldPosition(worldPos);
+    const proj = worldPos.clone().project(camera);
+    if(proj.z>1){ l.el.style.opacity='0'; return; }
+    const x = (proj.x*0.5+0.5)*rect.width;
+    const y = (-proj.y*0.5+0.5)*rect.height;
+    l.el.style.left = x+'px';
+    l.el.style.top = y+'px';
+    l.el.style.opacity='1';
+  });
+}
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+  updateLabels();
+}
+
+/* =========================================================================
+   RIGHT PANEL: colony list rendering
+   ========================================================================= */
+function refreshColonyList(){
+  const body = byId[currentBodyId];
+  const list = coloniesFor(currentBodyId);
+  document.getElementById('colony-count').textContent = list.length;
+  document.getElementById('colony-body-name').textContent = body.name.toUpperCase();
+  document.getElementById('colony-sub').textContent = list.length
+    ? `${list.length} settlement${list.length===1?'':'s'} tracked on ${body.name}.`
+    : 'No kolonies on this body in the connected sheet.';
+
+  const wrap = document.getElementById('colony-list');
+  if(!list.length){
+    wrap.innerHTML = `<div class="empty-state"><span class="eic">○</span>No kolonies on ${body.name}.</div>`;
+    return;
+  }
+  wrap.innerHTML = list.map(c=>{
+    const owners = parseOwners(c.owner);
+    return `
+    <div class="colony-row" data-id="${c.id}">
+      <span class="c-box" style="border-color:${ownerFlag(owners[0]).primary}"></span>
+      <span class="c-name-wrap">
+        <div class="c-name">${escapeHTML(c.name)}</div>
+        <div class="c-owner">${escapeHTML(owners.join('; '))}</div>
+      </span>
+      <span class="c-coords">${c.lat.toFixed(1)}°,${c.lon.toFixed(1)}°</span>
+      ${ownerFlagsHTML(c.owner,'c-flag')}
+    </div>`;
+  }).join('');
+
+  wrap.querySelectorAll('.colony-row').forEach(el=>{
+    el.addEventListener('click', ()=> focusColonyRow(el.dataset.id));
+  });
+}
+function focusColonyRow(id){
+  const row = document.querySelector(`.colony-row[data-id="${id}"]`);
+  if(row){ row.style.background='rgba(255,138,36,0.15)'; setTimeout(()=>row.style.background='',900); row.scrollIntoView({block:'nearest'}); }
+}
+
+/* =========================================================================
+   POLITICAL ENTITIES (right-panel "Entities" tab)
+   ========================================================================= */
+function allOwnersSummary(){
+  const map = {};
+  BODIES.forEach(b=>{
+    coloniesFor(b.id).forEach(c=>{
+      parseOwners(c.owner).forEach(o=>{
+        if(!map[o]) map[o] = {count:0, bodies:new Set()};
+        map[o].count++;
+        map[o].bodies.add(b.name);
+      });
+    });
+  });
+  return Object.keys(map).sort((a,b)=>a.localeCompare(b)).map(name=>({
+    name, count:map[name].count, bodies:[...map[name].bodies].sort()
+  }));
+}
+function renderOwnersList(){
+  const owners = allOwnersSummary();
+  document.getElementById('owners-sub').textContent =
+    `${owners.length} political entit${owners.length===1?'y':'ies'} recorded across the system.`;
+  const wrap = document.getElementById('owners-list');
+  if(!owners.length){
+    wrap.innerHTML = `<div class="empty-state"><span class="eic">○</span>No political entities recorded yet.</div>`;
+    return;
+  }
+  wrap.innerHTML = owners.map(o=>{
+    const flag = ownerFlag(o.name);
+    return `
+    <div class="owner-row">
+      <div class="o-top">
+        <span class="c-flag" style="${flagStyle(flag)}"></span>
+        <span class="o-name">${escapeHTML(o.name)}</span>
+        <span class="o-count">${o.count} kolon${o.count===1?'y':'ies'}</span>
+      </div>
+      <div class="o-bodies">${o.bodies.map(escapeHTML).join(', ')}</div>
+    </div>`;
+  }).join('');
+}
+document.getElementById('tab-kolonies').addEventListener('click', ()=>{
+  document.getElementById('tab-kolonies').classList.add('active');
+  document.getElementById('tab-owners').classList.remove('active');
+  document.getElementById('right-kolonies-view').style.display = '';
+  document.getElementById('right-owners-view').style.display = 'none';
+});
+document.getElementById('tab-owners').addEventListener('click', ()=>{
+  document.getElementById('tab-owners').classList.add('active');
+  document.getElementById('tab-kolonies').classList.remove('active');
+  document.getElementById('right-kolonies-view').style.display = 'none';
+  document.getElementById('right-owners-view').style.display = '';
+  renderOwnersList();
+});
+
+/* =========================================================================
+   BODY SELECTION
+   ========================================================================= */
+function selectBody(id){
+  if(!byId[id] || id==='kerbol') return;
+  currentBodyId = id;
+  const body = byId[id];
+
+  document.getElementById('card-type').textContent = body.type.toUpperCase();
+  document.getElementById('card-name').textContent = body.name;
+  document.getElementById('card-radius').textContent = fmtRadius(body.radiusM);
+  document.getElementById('card-orbits').textContent = byId[body.parent].name;
+  document.getElementById('card-dist').textContent = fmtDist(body.smaM);
+  document.getElementById('card-kolonies').textContent = coloniesFor(id).length;
+
+  loadBodyIntoScene(body);
+  camTheta = thetaForHorizontalDir(defaultLookDir(body)); camPhi = CAM_PHI_DEFAULT; camRadius = 9; updateCameraPos();
+
+  buildTree();
+  buildSchematic();
+  refreshColonyList();
+
+  if(window.innerWidth<=880){
+    document.getElementById('panel-left').classList.remove('open');
+  }
+}
+function refreshAll(){
+  buildTree();
+  buildSchematic();
+  refreshColonyList();
+  loadBodyIntoScene(byId[currentBodyId]);
+  document.getElementById('card-kolonies').textContent = coloniesFor(currentBodyId).length;
+  if(document.getElementById('tab-owners').classList.contains('active')) renderOwnersList();
+}
+
+/* =========================================================================
+   PANEL TOGGLES (mobile)
+   ========================================================================= */
+document.getElementById('btn-left-toggle').addEventListener('click', ()=>{
+  document.getElementById('panel-left').classList.toggle('open');
+  document.getElementById('panel-right').classList.remove('open');
+});
+document.getElementById('btn-right-toggle').addEventListener('click', ()=>{
+  document.getElementById('panel-right').classList.toggle('open');
+  document.getElementById('panel-left').classList.remove('open');
+});
+
+/* =========================================================================
+   INIT
+   ========================================================================= */
+async function init(){
+  resizeRenderer();
+  selectBody('kerbin');
+  await fetchSheetData();
+  animate();
+}
+init();

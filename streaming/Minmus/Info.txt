@@ -1,0 +1,11 @@
+Lowest Point
+LAT = 0.97225
+LON = -180.02775
+ALT = 0
+
+Highest Point
+LAT = -62.941
+LON = 74.6175
+ALT = 5724.60000000001
+
+Radius (km) = 60
