@@ -65,19 +65,19 @@ let currentBodyId = 'kerbin';
 const DEFAULT_API_BASE = 'https://script.google.com/macros/s/AKfycbzxdItRr5JMawEK-LYLcd4vqLmCsHHmS5-dm4apfRSEGXbtpCTCNLkz9bs00aOEiHBq/exec';
 // hardcoded — not exposed or editable in the UI
 const sheetConfig = { apiBase: DEFAULT_API_BASE, tab:'Colonies', entityTab:'Entities' };
-let sheetColonies = {};
+let sheetFacilities = {};
 let entityFlags = {};
 
-function coloniesFor(bodyId){
-  return sheetColonies[bodyId] || [];
+function facilitiesFor(bodyId){
+  return sheetFacilities[bodyId] || [];
 }
 
 /* =========================================================================
    GOOGLE SHEET FETCH  — via the deployed Apps Script API (kolonypedia-appscript.gs),
    which returns each tab as JSON in the same shape opensheet.elk.sh used to.
    ========================================================================= */
-async function fetchAndParseColonies(){
-  if(!sheetConfig.apiBase){ sheetColonies = {}; return; }
+async function fetchAndParseFacilities(){
+  if(!sheetConfig.apiBase){ sheetFacilities = {}; return; }
   try{
     const url = `${sheetConfig.apiBase}?tab=${encodeURIComponent(sheetConfig.tab||'Colonies')}`;
     const res = await fetch(url);
@@ -95,17 +95,17 @@ async function fetchAndParseColonies(){
       const lat = parseFloat(r['lat'] || r['latitude']);
       const lon = parseFloat(r['lon'] || r['long'] || r['longitude']);
       if(!body || isNaN(lat) || isNaN(lon)){ unmatched++; return; }
-      const name = r['name'] || r['colony'] || ('Kolony '+(i+1));
+      const name = r['name'] || r['colony'] || ('Facility '+(i+1));
       const owner = r['owner'] || r['faction'] || r['nation'] || 'Unclaimed';
       (grouped[body.id] = grouped[body.id]||[]).push({
         id:'sheet-'+body.id+'-'+i, name, lat, lon, owner, source:'sheet'
       });
       matched++;
     });
-    sheetColonies = grouped;
+    sheetFacilities = grouped;
   }catch(e){
-    sheetColonies = {};
-    console.warn('Kolonypedia: could not load Colonies from the API:', e.message);
+    sheetFacilities = {};
+    console.warn('Could not load Facilities from the API:', e.message);
   }
 }
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
@@ -146,7 +146,7 @@ async function fetchAndParseEntities(){
   }
 }
 async function fetchSheetData(){
-  await Promise.all([fetchAndParseColonies(), fetchAndParseEntities()]);
+  await Promise.all([fetchAndParseFacilities(), fetchAndParseEntities()]);
   refreshAll();
 }
 
@@ -164,7 +164,7 @@ function toast(msg){
 
 /* =========================================================================
    OWNER-DERIVED FLAGS
-   Every colony's flag is deterministically derived from its Owner string,
+   Every facility's flag is deterministically derived from its Owner string,
    so every settlement belonging to the same faction shares one flag —
    anywhere in the system, sourced from the sheet or added locally.
    ========================================================================= */
@@ -231,13 +231,14 @@ function buildSchematic(){
   const logMax = Math.log10(Math.max(...smas));
   const xFor = sma => padL + (Math.log10(sma)-logMin)/(logMax-logMin) * (W-padL-padR);
 
-  let svgHTML = `<line x1="${padL-8}" y1="${cy}" x2="${W-padR+2}" y2="${cy}" stroke="#1f2c40" stroke-width="1"/>`;
-  svgHTML += `<circle cx="${padL-8}" cy="${cy}" r="5" fill="#ffcf6b"/>`;
+  let svgHTML = `<line x1="${padL-8}" y1="${cy}" x2="${W-padR+2}" y2="${cy}" stroke="#28331f" stroke-width="1"/>`;
+  svgHTML += `<circle cx="${padL-8}" cy="${cy}" r="5" fill="none" stroke="#3fe676" stroke-width="1.6"/>`;
   PLANETS.forEach(p=>{
     const x = xFor(p.smaM);
     const r = 3 + Math.log10(p.radiusM/1000)*0.9;
-    svgHTML += `<g class="sch-body${p.id===currentBodyId?' active':''}" data-body="${p.id}">
-      <circle class="dot" cx="${x}" cy="${cy}" r="${Math.max(2.5,r)}" fill="${p.color}"/>
+    const isActive = p.id===currentBodyId;
+    svgHTML += `<g class="sch-body${isActive?' active':''}" data-body="${p.id}">
+      <circle class="dot" cx="${x}" cy="${cy}" r="${Math.max(2.5,r)}" fill="none" stroke="${p.color}" stroke-width="1.6"/>
       <text class="sch-label" x="${x}" y="${cy+16}" text-anchor="middle">${p.name}</text>
     </g>`;
   });
@@ -255,17 +256,19 @@ function buildTree(){
   let html = `<div class="tree-star"><span class="sun-dot"></span>KERBOL</div>`;
   PLANETS.forEach(p=>{
     const moons = moonsOf(p.id);
-    const n = coloniesFor(p.id).length;
-    html += `<div class="tree-body${p.id===currentBodyId?' active':''}" data-body="${p.id}">
-      <span class="b-dot" style="background:${p.color}"></span>${p.name}
+    const n = facilitiesFor(p.id).length;
+    const isActive = p.id===currentBodyId;
+    html += `<div class="tree-body${isActive?' active':''}" data-body="${p.id}">
+      <span class="b-dot" style="border-color:${p.color};background:${isActive?p.color:'transparent'}"></span>${p.name}
       ${n?`<span class="b-count">${n}</span>`:''}
     </div>`;
     if(moons.length){
       html += `<div class="tree-moons">`;
       moons.forEach(m=>{
-        const mn = coloniesFor(m.id).length;
-        html += `<div class="tree-body${m.id===currentBodyId?' active':''}" data-body="${m.id}">
-          <span class="b-dot" style="background:${m.color}"></span>${m.name}
+        const mn = facilitiesFor(m.id).length;
+        const mActive = m.id===currentBodyId;
+        html += `<div class="tree-body${mActive?' active':''}" data-body="${m.id}">
+          <span class="b-dot" style="border-color:${m.color};background:${mActive?m.color:'transparent'}"></span>${m.name}
           ${mn?`<span class="b-count">${mn}</span>`:''}
         </div>`;
       });
@@ -299,14 +302,8 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(46, 1, 0.1, 20000);
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+const ambientLight = new THREE.AmbientLight(0xf1f7ec, 1.15);
 scene.add(ambientLight);
-const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
-keyLight.position.set(5,4,6);
-scene.add(keyLight);
-const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
-fillLight.position.set(-4,-2,-5);
-scene.add(fillLight);
 
 let planetGroup = new THREE.Group();
 scene.add(planetGroup);
@@ -316,11 +313,13 @@ scene.add(contextGroup);
 let planetMesh=null, graticule=null;
 let markerObjs = [];
 // Per-body terrain sample, set once the current body's heightmap image has
-// loaded and been decoded to pixel data. Used so colony pins sit on the
+// loaded and been decoded to pixel data. Used so facility pins sit on the
 // actual displaced terrain instead of a flat sphere. Null while no heightmap
 // data is available yet (or for bodies with none), in which case pins fall
 // back to the flat RENDER_R radius.
 let heightSample = null;
+let graticuleLabelObjs = [];
+let selectedFacilityId = null;
 let contextObjs = [];
 let contextLabels = [];
 let loadToken = 0;
@@ -330,7 +329,7 @@ const unitSphereGeo = new THREE.SphereGeometry(1, 128, 96);
 const contextSphereGeo = new THREE.SphereGeometry(1, 24, 16);
 
 let camTheta = 0, camPhi = CAM_PHI_DEFAULT, camRadius = 9;
-const camRadiusMin=4, camRadiusMax=16;
+const camRadiusMin=3.3, camRadiusMax=16;
 function updateCameraPos(){
   camPhi = Math.max(0.18, Math.min(Math.PI-0.18, camPhi));
   camRadius = Math.max(camRadiusMin, Math.min(camRadiusMax, camRadius));
@@ -428,7 +427,7 @@ function markerRadiusFor(lat, lon){
 // happens.
 function refreshMarkerElevations(){
   markerObjs.forEach(m=>{
-    const r = markerRadiusFor(m.colony.lat, m.colony.lon);
+    const r = markerRadiusFor(m.facility.lat, m.facility.lon);
     m.mesh.position.copy(m.normal.clone().multiplyScalar(r));
   });
 }
@@ -456,7 +455,7 @@ function loadImageTexture(url){
       // column 0 at 180°W, the centre column at 0° longitude, and the last
       // column at 180°E. repeat.x=1/offset.x=1 (equivalent to no change,
       // since offset wraps mod 1) is the value confirmed to line imagery up
-      // correctly with colony pins and the lat/lon grid.
+      // correctly with facility pins and the lat/lon grid.
       tex.wrapS = THREE.RepeatWrapping;
       tex.repeat.x = 1;
       tex.offset.x = 1;
@@ -512,8 +511,8 @@ async function getAltitudeRange(body){
 
 function buildGraticule(r){
   const group = new THREE.Group();
-  const matNormal = new THREE.LineBasicMaterial({color:0xbcd4e8, transparent:true, opacity:0.22});
-  const matMajor = new THREE.LineBasicMaterial({color:0x8fe3db, transparent:true, opacity:0.55});
+  const matNormal = new THREE.LineBasicMaterial({color:0x2f6b42, transparent:true, opacity:0.3});
+  const matMajor = new THREE.LineBasicMaterial({color:0x3fe676, transparent:true, opacity:0.6});
   const segs=96;
   for(let lonStep=0; lonStep<180; lonStep+=30){
     const pts2=[];
@@ -540,11 +539,53 @@ function buildGraticule(r){
     const geo = new THREE.BufferGeometry().setFromPoints(pts);
     group.add(new THREE.LineLoop(geo, lat===0?matMajor:matNormal));
   }
+
+  // Coordinate readout: text anchored right on the grid lines themselves,
+  // then nudged a few pixels clear of the line in screen space (see
+  // updateLabels) so it doesn't sit directly on top of the line it's
+  // labelling. Longitude labels sit on the equator (least likely to bunch
+  // up near the poles); latitude labels repeat at four longitudes around
+  // the sphere so at least one set stays on the visible hemisphere as the
+  // body is rotated.
+  const layer = document.getElementById('context-label-layer');
+  function addGridLabel(lat, lonStep, text){
+    const anchor = new THREE.Object3D();
+    anchor.position.copy(latLonToVec3(lat, lonStep, r));
+    group.add(anchor);
+    const el = document.createElement('div');
+    el.className = 'grid-label';
+    el.textContent = text;
+    layer.appendChild(el);
+    graticuleLabelObjs.push({anchor, el});
+  }
+  for(let lonStep=-150; lonStep<=180; lonStep+=30){
+    const text = lonStep===0 ? '0\u00B0' : (lonStep===180||lonStep===-180) ? '180\u00B0' : `${Math.abs(lonStep)}\u00B0${lonStep>0?'E':'W'}`;
+    addGridLabel(0, lonStep, text);
+  }
+  for(let lat=-60; lat<=60; lat+=30){
+    if(lat===0) continue; // equator already labelled by the longitude labels
+    for(let lonStep=0; lonStep<360; lonStep+=90){
+      addGridLabel(lat, lonStep, `${Math.abs(lat)}\u00B0${lat>0?'N':'S'}`);
+    }
+  }
+
   return group;
 }
+function clearGraticuleLabels(){
+  graticuleLabelObjs.forEach(l=>{ if(l.el.parentNode) l.el.parentNode.removeChild(l.el); });
+  graticuleLabelObjs = [];
+}
 
-const pinGeo = new THREE.ConeGeometry(0.032, 0.09, 10);
-const pinCapGeo = new THREE.SphereGeometry(0.026, 10, 8);
+// Vector-line "beacon" marker: a ring on the surface, a mast, and a pulsing
+// ring at the top — drawn only in outline, the way a vector-scope display
+// (radar, motion tracker) draws everything as lines rather than filled
+// shapes. Shared geometries, scaled per-instance.
+const beaconRingGeo = (()=>{
+  const pts=[]; const n=28;
+  for(let i=0;i<=n;i++){ const a=(i/n)*Math.PI*2; pts.push(new THREE.Vector3(Math.cos(a),0,Math.sin(a))); }
+  return new THREE.BufferGeometry().setFromPoints(pts);
+})();
+const beaconMastGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,1,0)]);
 
 function clearMarkers(){
   markerObjs.forEach(m=>{ planetGroup.remove(m.mesh); });
@@ -553,30 +594,44 @@ function clearMarkers(){
 }
 function escapeHTML(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
-function addMarkerObject(colony){
-  const owners = parseOwners(colony.owner);
+function addMarkerObject(facility){
+  const owners = parseOwners(facility.owner);
   const firstFlag = ownerFlag(owners[0]);
-  const normal = latLonToVec3(colony.lat, colony.lon, 1); // unit direction, already normalized
-  const pos = normal.clone().multiplyScalar(markerRadiusFor(colony.lat, colony.lon));
+  const normal = latLonToVec3(facility.lat, facility.lon, 1); // unit direction, already normalized
+  const pos = normal.clone().multiplyScalar(markerRadiusFor(facility.lat, facility.lon));
   const group = new THREE.Group();
   group.position.copy(pos);
   group.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), normal);
 
-  const mat = new THREE.MeshBasicMaterial({color:new THREE.Color(firstFlag.primary)});
-  const cone = new THREE.Mesh(pinGeo, mat);
-  cone.position.y = 0.045;
-  const cap = new THREE.Mesh(pinCapGeo, new THREE.MeshBasicMaterial({color:0xffffff}));
-  cap.position.y = 0.095;
-  group.add(cone); group.add(cap);
+  const ownerMat = new THREE.LineBasicMaterial({color:new THREE.Color(firstFlag.primary)});
+
+  const baseRing = new THREE.LineLoop(beaconRingGeo, ownerMat);
+  baseRing.scale.set(0.03,1,0.03);
+  baseRing.position.y = 0.004;
+
+  const mast = new THREE.Line(beaconMastGeo, ownerMat);
+  mast.scale.y = 0.09;
+  mast.position.y = 0.004;
+
+  const topRingMat = new THREE.LineBasicMaterial({color:0x3fe676, transparent:true, opacity:0.9});
+  const topRing = new THREE.LineLoop(beaconRingGeo, topRingMat);
+  topRing.scale.set(0.017,1,0.017);
+  topRing.position.y = 0.096;
+
+  group.add(baseRing, mast, topRing);
   planetGroup.add(group);
 
   const label = document.createElement('div');
   label.className='marker-label';
-  label.innerHTML = `${escapeHTML(colony.name)}${ownerFlagsHTML(colony.owner,'m-flag')}`;
-  label.addEventListener('click', (e)=>{ e.stopPropagation(); focusColonyRow(colony.id); });
+  label.innerHTML = `<span class="m-dot"></span><span class="m-text">${escapeHTML(facility.name)}${ownerFlagsHTML(facility.owner,'m-flag')}</span>`;
+  const mText = label.querySelector('.m-text');
+  const markerEntry = {mesh:group, label, mText, facility, normal, topRing, topRingMat, hovered:false, phase:Math.random()*Math.PI*2};
+  mText.addEventListener('click', (e)=>{ e.stopPropagation(); focusFacilityRow(facility.id); });
+  mText.addEventListener('mouseenter', ()=>{ markerEntry.hovered = true; });
+  mText.addEventListener('mouseleave', ()=>{ markerEntry.hovered = false; });
   document.getElementById('marker-layer').appendChild(label);
 
-  markerObjs.push({mesh:group, label, colony, normal});
+  markerObjs.push(markerEntry);
 }
 
 function clearContextBodies(){
@@ -660,8 +715,10 @@ function loadBodyIntoScene(body){
   const myToken = ++loadToken;
   if(planetMesh){ planetGroup.remove(planetMesh); planetMesh.material.dispose(); }
   if(graticule){ planetGroup.remove(graticule); }
+  clearGraticuleLabels();
   clearMarkers();
   heightSample = null;
+  selectedFacilityId = null;
 
   const fallbackTex = getBodyTexture();
   const mat = new THREE.MeshStandardMaterial({map:fallbackTex, roughness:0.95, metalness:0.0});
@@ -711,6 +768,7 @@ function loadBodyIntoScene(body){
       const peakWorldOffset = RENDER_R * Math.max(0, objScale + objBias);
       const graticuleRadius = RENDER_R*1.004 + peakWorldOffset;
       if(graticule){ planetGroup.remove(graticule); }
+      clearGraticuleLabels();
       graticule = buildGraticule(graticuleRadius);
       planetGroup.add(graticule);
     }).catch(()=>{ /* no local heightmap for this body — flat sphere is fine */ });
@@ -721,7 +779,7 @@ function loadBodyIntoScene(body){
 
   planetGroup.rotation.set(0,0,0);
 
-  coloniesFor(body.id).forEach(c=> addMarkerObject(c));
+  facilitiesFor(body.id).forEach(c=> addMarkerObject(c));
   buildContextBodies(body);
 }
 
@@ -739,19 +797,35 @@ function updateLabels(){
 
   markerObjs.forEach(m=>{
     const worldPos = new THREE.Vector3();
-    m.mesh.getWorldPosition(worldPos);
+    m.topRing.getWorldPosition(worldPos);
     const worldNormal = m.normal.clone().applyQuaternion(planetGroup.quaternion);
     const toCam = camera.position.clone().sub(worldPos).normalize();
     const facing = worldNormal.dot(toCam);
     const proj = worldPos.clone().project(camera);
-    const visible = facing > 0.06 && proj.z < 1;
-    if(!visible){ m.label.style.opacity='0'; m.label.style.pointerEvents='none'; return; }
+    const visible = facing > 0.02 && proj.z < 1;
+    if(!visible){ m.label.style.opacity='0'; m.mText.style.pointerEvents='none'; return; }
     const x = (proj.x*0.5+0.5)*rect.width;
-    const y = (-proj.y*0.5+0.5)*rect.height - 10;
+    const y = (-proj.y*0.5+0.5)*rect.height;
     m.label.style.left = x+'px';
     m.label.style.top = y+'px';
-    m.label.style.opacity = (0.4+facing*0.8>1?1:0.4+facing*0.8);
-    m.label.style.pointerEvents='auto';
+    m.label.style.opacity = Math.min(1, facing/0.35);
+    m.mText.style.pointerEvents='auto';
+  });
+
+  graticuleLabelObjs.forEach(l=>{
+    const worldPos = new THREE.Vector3();
+    l.anchor.getWorldPosition(worldPos);
+    const localNormal = l.anchor.position.clone().normalize();
+    const worldNormal = localNormal.applyQuaternion(planetGroup.quaternion);
+    const toCam = camera.position.clone().sub(worldPos).normalize();
+    const facing = worldNormal.dot(toCam);
+    const proj = worldPos.clone().project(camera);
+    if(facing <= 0.02 || proj.z >= 1){ l.el.style.opacity='0'; return; }
+    const x = (proj.x*0.5+0.5)*rect.width;
+    const y = (-proj.y*0.5+0.5)*rect.height - 9; // nudge clear of the grid line itself
+    l.el.style.left = x+'px';
+    l.el.style.top = y+'px';
+    l.el.style.opacity = Math.min(0.85, facing/0.35*0.85);
   });
 
   contextLabels.forEach(l=>{
@@ -768,48 +842,60 @@ function updateLabels(){
 }
 function animate(){
   requestAnimationFrame(animate);
+  const t = performance.now()*0.001;
+  markerObjs.forEach(m=>{
+    const selected = String(m.facility.id)===String(selectedFacilityId);
+    const s = selected ? 0.017*(1 + 0.22*Math.sin(t*2.4 + m.phase)) : 0.005;
+    m.topRing.scale.set(s,1,s);
+    // Same colour rule as the label text/dot: green normally, white on hover.
+    m.topRingMat.color.set(m.hovered ? 0xffffff : 0x3fe676);
+  });
   renderer.render(scene, camera);
   updateLabels();
 }
 
 /* =========================================================================
-   RIGHT PANEL: colony list rendering
+   RIGHT PANEL: facility list rendering
    ========================================================================= */
-function refreshColonyList(){
+function refreshFacilityList(){
   const body = byId[currentBodyId];
-  const list = coloniesFor(currentBodyId);
-  document.getElementById('colony-count').textContent = list.length;
-  document.getElementById('colony-body-name').textContent = body.name.toUpperCase();
-  document.getElementById('colony-sub').textContent = list.length
+  const list = facilitiesFor(currentBodyId);
+  document.getElementById('facility-count').textContent = list.length;
+  document.getElementById('facility-body-name').textContent = body.name.toUpperCase();
+  document.getElementById('facility-sub').textContent = list.length
     ? `${list.length} settlement${list.length===1?'':'s'} tracked on ${body.name}.`
-    : 'No kolonies on this body in the connected sheet.';
+    : 'No facilities on this body in the connected sheet.';
 
-  const wrap = document.getElementById('colony-list');
+  const wrap = document.getElementById('facility-list');
   if(!list.length){
-    wrap.innerHTML = `<div class="empty-state"><span class="eic">○</span>No kolonies on ${body.name}.</div>`;
+    wrap.innerHTML = `<div class="empty-state"><span class="eic">○</span>No facilities on ${body.name}.</div>`;
     return;
   }
   wrap.innerHTML = list.map(c=>{
     const owners = parseOwners(c.owner);
+    const isSel = String(c.id)===String(selectedFacilityId);
     return `
-    <div class="colony-row" data-id="${c.id}">
+    <div class="facility-row${isSel?' selected':''}" data-id="${c.id}">
       <span class="c-box" style="border-color:${ownerFlag(owners[0]).primary}"></span>
       <span class="c-name-wrap">
         <div class="c-name">${escapeHTML(c.name)}</div>
         <div class="c-owner">${escapeHTML(owners.join('; '))}</div>
       </span>
       <span class="c-coords">${c.lat.toFixed(1)}°,${c.lon.toFixed(1)}°</span>
-      ${ownerFlagsHTML(c.owner,'c-flag')}
     </div>`;
   }).join('');
 
-  wrap.querySelectorAll('.colony-row').forEach(el=>{
-    el.addEventListener('click', ()=> focusColonyRow(el.dataset.id));
+  wrap.querySelectorAll('.facility-row').forEach(el=>{
+    el.addEventListener('click', ()=> focusFacilityRow(el.dataset.id));
   });
 }
-function focusColonyRow(id){
-  const row = document.querySelector(`.colony-row[data-id="${id}"]`);
-  if(row){ row.style.background='rgba(255,138,36,0.15)'; setTimeout(()=>row.style.background='',900); row.scrollIntoView({block:'nearest'}); }
+function focusFacilityRow(id){
+  selectedFacilityId = id;
+  document.querySelectorAll('.facility-row').forEach(el=>{
+    el.classList.toggle('selected', String(el.dataset.id)===String(id));
+  });
+  const row = document.querySelector(`.facility-row[data-id="${id}"]`);
+  if(row){ row.scrollIntoView({block:'nearest'}); }
 }
 
 /* =========================================================================
@@ -818,7 +904,7 @@ function focusColonyRow(id){
 function allOwnersSummary(){
   const map = {};
   BODIES.forEach(b=>{
-    coloniesFor(b.id).forEach(c=>{
+    facilitiesFor(b.id).forEach(c=>{
       parseOwners(c.owner).forEach(o=>{
         if(!map[o]) map[o] = {count:0, bodies:new Set()};
         map[o].count++;
@@ -844,24 +930,24 @@ function renderOwnersList(){
     return `
     <div class="owner-row">
       <div class="o-top">
-        <span class="c-flag" style="${flagStyle(flag)}"></span>
+        <span class="o-flag" style="${flagStyle(flag)}"></span>
         <span class="o-name">${escapeHTML(o.name)}</span>
-        <span class="o-count">${o.count} kolon${o.count===1?'y':'ies'}</span>
+        <span class="o-count">${o.count} facilit${o.count===1?'y':'ies'}</span>
       </div>
       <div class="o-bodies">${o.bodies.map(escapeHTML).join(', ')}</div>
     </div>`;
   }).join('');
 }
-document.getElementById('tab-kolonies').addEventListener('click', ()=>{
-  document.getElementById('tab-kolonies').classList.add('active');
+document.getElementById('tab-facilities').addEventListener('click', ()=>{
+  document.getElementById('tab-facilities').classList.add('active');
   document.getElementById('tab-owners').classList.remove('active');
-  document.getElementById('right-kolonies-view').style.display = '';
+  document.getElementById('right-facilities-view').style.display = '';
   document.getElementById('right-owners-view').style.display = 'none';
 });
 document.getElementById('tab-owners').addEventListener('click', ()=>{
   document.getElementById('tab-owners').classList.add('active');
-  document.getElementById('tab-kolonies').classList.remove('active');
-  document.getElementById('right-kolonies-view').style.display = 'none';
+  document.getElementById('tab-facilities').classList.remove('active');
+  document.getElementById('right-facilities-view').style.display = 'none';
   document.getElementById('right-owners-view').style.display = '';
   renderOwnersList();
 });
@@ -879,14 +965,14 @@ function selectBody(id){
   document.getElementById('card-radius').textContent = fmtRadius(body.radiusM);
   document.getElementById('card-orbits').textContent = byId[body.parent].name;
   document.getElementById('card-dist').textContent = fmtDist(body.smaM);
-  document.getElementById('card-kolonies').textContent = coloniesFor(id).length;
+  document.getElementById('card-facilities').textContent = facilitiesFor(id).length;
 
   loadBodyIntoScene(body);
   camTheta = thetaForHorizontalDir(defaultLookDir(body)); camPhi = CAM_PHI_DEFAULT; camRadius = 9; updateCameraPos();
 
   buildTree();
   buildSchematic();
-  refreshColonyList();
+  refreshFacilityList();
 
   if(window.innerWidth<=880){
     document.getElementById('panel-left').classList.remove('open');
@@ -895,9 +981,9 @@ function selectBody(id){
 function refreshAll(){
   buildTree();
   buildSchematic();
-  refreshColonyList();
+  refreshFacilityList();
   loadBodyIntoScene(byId[currentBodyId]);
-  document.getElementById('card-kolonies').textContent = coloniesFor(currentBodyId).length;
+  document.getElementById('card-facilities').textContent = facilitiesFor(currentBodyId).length;
   if(document.getElementById('tab-owners').classList.contains('active')) renderOwnersList();
 }
 
