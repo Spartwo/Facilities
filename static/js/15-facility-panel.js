@@ -24,11 +24,8 @@ function refreshFacilityList(){
     const coordsHTML = isOrbital
       ? `${(c.smaM/1000).toFixed(1)}km`
       : `${c.lat.toFixed(1)}°,${c.lon.toFixed(1)}°`;
-    const ownerFlagData = ownerFlag(owners[0]);
-    const boxHTML = ownerFlagData ? `<span class="c-box" style="border-color:${ownerFlagData.primary}"></span>` : '';
     return `
     <div class="facility-row${isSel?' selected':''}" data-id="${c.id}">
-      ${boxHTML}
       <span class="c-name-wrap">
         <div class="c-name">${escapeHTML(c.name)}</div>
         <div class="c-owner">${escapeHTML(owners.join('; '))}</div>
