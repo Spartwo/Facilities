@@ -126,10 +126,10 @@ header .spacer{flex:1;}
 
 /* body tree */
 .tree-star{
-  font-family:var(--display); font-size:16px; letter-spacing:3px; color:var(--accent);
+  font-family:var(--display); font-size:16px; letter-spacing:3px; color:#fff;
   padding:6px 0; display:flex; align-items:center; gap:8px; text-transform:uppercase;
 }
-.tree-star .sun-dot{width:10px;height:10px;border-radius:50%; border:2px solid var(--accent); background:transparent;}
+.tree-star .sun-dot{width:10px;height:10px;border-radius:50%; border:2px solid #fff; background:transparent;}
 .tree-body{
   display:flex; align-items:center; gap:8px;
   padding:7px 8px; margin:1px 0; cursor:pointer;
