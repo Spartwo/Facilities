@@ -3,7 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FACILITY REGISTER — Kerbol System</title>
+<script>
+  /* GitHub Pages deep-link restore. Pages has no server-side routing, so a
+     visit to /Facilities/Laythe hits 404.html, which bounces to
+     /Facilities/?/Laythe. Turn that back into the clean /Facilities/Laythe
+     before anything else loads (see 404.html). */
+  (function(l){
+    if(l.search[1] !== '/') return;
+    var d = l.search.slice(1).split('&').map(function(s){ return s.replace(/~and~/g,'&'); }).join('?');
+    var i = d.indexOf('?');
+    var path = i < 0 ? d : d.slice(0, i);
+    var qs   = i < 0 ? '' : d.slice(i);
+    // keep only the first segment and never a trailing slash, so relative
+    // asset URLs (static/, streaming/) keep resolving from the app root
+    var seg = path.split('/').filter(Boolean)[0];
+    history.replaceState(null, '', l.pathname.replace(/\/?$/, '/') + (seg || '') + qs + l.hash);
+  })(window.location);
+</script>
+<title>KP Facilities</title>
+<link rel="icon" href="static/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="static/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="static/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Staatliches&family=Share+Tech+Mono&display=swap" rel="stylesheet">
@@ -61,7 +81,7 @@
       </div>
     </div>
 
-    <div class="viewport-hint">Drag to rotate &nbsp;·&nbsp; Scroll to zoom</div>
+    <div class="viewport-hint">Drag to rotate &nbsp;·&nbsp; Scroll to zoom<span class="hint-alt"> &nbsp;·&nbsp; Hold <b id="alt-key-name">Alt</b> for coordinates</span></div>
   </div>
 
   <!-- RIGHT PANEL: facility list / political entities -->
@@ -107,6 +127,7 @@
 <script src="static/js/15-facility-panel.js"></script>
 <script src="static/js/16-entities-panel.js"></script>
 <script src="static/js/17-body-select.js"></script>
-<script src="static/js/18-main.js"></script>
+<script src="static/js/18-coord-tooltip.js"></script>
+<script src="static/js/19-main.js"></script>
 </body>
 </html>

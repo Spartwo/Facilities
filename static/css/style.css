@@ -205,9 +205,24 @@ header .spacer{flex:1;}
   font-family:var(--mono); font-size:11.5px; letter-spacing:1.5px; color:var(--text-dim);
   background:rgba(8,10,5,0.85); border:1px solid var(--border-dim); padding:6px 14px;
   pointer-events:none; text-align:center; text-transform:uppercase;
+  /* left:50% would otherwise shrink the box to half the viewport and wrap the text */
+  width:max-content; max-width:calc(100% - 28px);
 }
 .viewport-hint::before{content:'> '; color:var(--accent-dim);}
 .viewport-hint b{color:var(--accent); font-weight:400;}
+/* Alt-for-coordinates only makes sense with a keyboard */
+@media (pointer:coarse){ .viewport-hint .hint-alt{display:none;} }
+
+/* Alt-hover lat/lon readout (18-coord-tooltip.js). Sits under the CRT overlay
+   (z-index 999) like everything else, so it gets the scanlines too. */
+#coord-tip{
+  position:fixed; left:0; top:0; z-index:900; pointer-events:none; display:none;
+  background:rgba(8,10,5,0.92); border:1px solid var(--accent-dim); color:var(--accent);
+  padding:4px 9px; font-family:var(--mono); font-size:12.5px; letter-spacing:1px;
+  white-space:pre; text-transform:uppercase;
+  text-shadow:0 0 3px #000;
+}
+#coord-tip.show{display:block;}
 
 .btn{
   flex:1; padding:8px 10px; border:1px solid var(--border);

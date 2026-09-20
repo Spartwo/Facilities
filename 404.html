@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KP Facilities</title>
+<script>
+  /* GitHub Pages has no server-side routing, so a deep link such as
+     https://spartwo.github.io/Facilities/Laythe lands here. Bounce it to
+     /Facilities/?/Laythe; index.html rewrites that back to the clean URL
+     before the app loads.
+
+     pathSegmentsToKeep = 1 because the site lives under /Facilities/.
+     Set it to 0 if this is ever served from the root of a domain. */
+  var pathSegmentsToKeep = 1;
+  var l = window.location;
+  l.replace(
+    l.protocol + '//' + l.host +
+    l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
+    l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
+    (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+    l.hash
+  );
+</script>
+</head>
+<body></body>
+</html>

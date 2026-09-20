@@ -17,7 +17,9 @@ document.getElementById('btn-right-toggle').addEventListener('click', ()=>{
    ========================================================================= */
 async function init(){
   resizeRenderer();
-  selectBody('kerbin');
+  // start on the body named in the URL (/Laythe), else Kerbin; 'replace' so
+  // the initial view doesn't add a history entry of its own
+  selectBody(bodyIdFromURL() || DEFAULT_BODY_ID, {history:'replace'});
   await fetchSheetData();
   animate();
 }
